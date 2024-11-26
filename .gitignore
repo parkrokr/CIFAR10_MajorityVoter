@@ -1,0 +1,4 @@
+# Large files to ignore
+pytorch_implementation/BiReal18_34/data/cifar-10-python.tar.gz
+pytorch_implementation/BiReal18_34/models/checkpoint.pth.tar
+pytorch_implementation/BiReal18_34/models/model_best.pth.tar
