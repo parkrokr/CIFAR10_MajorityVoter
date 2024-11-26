@@ -19,7 +19,6 @@ from torchvision import datasets, transforms
 from torch.autograd import Variable
 from birealnet import birealnet18
 
-
 parser = argparse.ArgumentParser("birealnet")
 parser.add_argument('--batch_size', type=int, default=512, help='batch size')
 parser.add_argument('--epochs', type=int, default=256, help='num of training epochs')
@@ -27,13 +26,14 @@ parser.add_argument('--learning_rate', type=float, default=0.001, help='init lea
 parser.add_argument('--momentum', type=float, default=0.9, help='momentum')
 parser.add_argument('--weight_decay', type=float, default=0, help='weight decay')
 parser.add_argument('--save', type=str, default='./models', help='path for saving trained models')
-parser.add_argument('--data', metavar='DIR', help='path to dataset')
+parser.add_argument('--data', metavar='DIR', default='./data', help='path to dataset')
 parser.add_argument('--label_smooth', type=float, default=0.1, help='label smoothing')
-parser.add_argument('-j', '--workers', default=40, type=int, metavar='N',
+parser.add_argument('-j', '--workers', default=4, type=int, metavar='N',
                     help='number of data loading workers (default: 4)')
 args = parser.parse_args()
 
-CLASSES = 1000
+# CIFAR-10 설정
+CLASSES = 10
 
 if not os.path.exists('log'):
     os.mkdir('log')
@@ -67,19 +67,19 @@ def main():
     all_parameters = model.parameters()
     weight_parameters = []
     for pname, p in model.named_parameters():
-        if p.ndimension() == 4 or pname=='classifier.0.weight' or pname == 'classifier.0.bias':
+        if p.ndimension() == 4 or pname == 'classifier.0.weight' or pname == 'classifier.0.bias':
             weight_parameters.append(p)
     weight_parameters_id = list(map(id, weight_parameters))
     other_parameters = list(filter(lambda p: id(p) not in weight_parameters_id, all_parameters))
 
     optimizer = torch.optim.Adam(
-            [{'params' : other_parameters},
-            {'params' : weight_parameters, 'weight_decay' : args.weight_decay}],
-            lr=args.learning_rate,)
+            [{'params': other_parameters},
+             {'params': weight_parameters, 'weight_decay': args.weight_decay}],
+            lr=args.learning_rate)
 
-    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda step : (1.0-step/args.epochs), last_epoch=-1)
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda step: (1.0 - step / args.epochs), last_epoch=-1)
     start_epoch = 0
-    best_top1_acc= 0
+    best_top1_acc = 0
 
     checkpoint_tar = os.path.join(args.save, 'checkpoint.pth.tar')
     if os.path.exists(checkpoint_tar):
@@ -88,45 +88,37 @@ def main():
         start_epoch = checkpoint['epoch']
         best_top1_acc = checkpoint['best_top1_acc']
         model.load_state_dict(checkpoint['state_dict'], strict=False)
-        logging.info("loaded checkpoint {} epoch = {}" .format(checkpoint_tar, checkpoint['epoch']))
+        logging.info("loaded checkpoint {} epoch = {}".format(checkpoint_tar, checkpoint['epoch']))
 
     # adjust the learning rate according to the checkpoint
     for epoch in range(start_epoch):
         scheduler.step()
 
     # load training data
-    traindir = os.path.join(args.data, 'train')
-    valdir = os.path.join(args.data, 'val')
-    normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                     std=[0.229, 0.224, 0.225])
+    normalize = transforms.Normalize(mean=[0.4914, 0.4822, 0.4465], std=[0.2470, 0.2435, 0.2616])
 
-    # data augmentation
-    crop_scale = 0.08
-    lighting_param = 0.1
     train_transforms = transforms.Compose([
-        transforms.RandomResizedCrop(224, scale=(crop_scale, 1.0)),
-        Lighting(lighting_param),
+        transforms.RandomCrop(32, padding=4),
         transforms.RandomHorizontalFlip(),
         transforms.ToTensor(),
         normalize])
 
-    train_dataset = datasets.ImageFolder(
-        traindir,
-        transform=train_transforms)
+    val_transforms = transforms.Compose([
+        transforms.ToTensor(),
+        normalize])
+
+    train_dataset = datasets.CIFAR10(
+        root=args.data, train=True, download=True, transform=train_transforms)
 
     train_loader = torch.utils.data.DataLoader(
         train_dataset, batch_size=args.batch_size, shuffle=True,
         num_workers=args.workers, pin_memory=True)
 
-    # load validation data
+    val_dataset = datasets.CIFAR10(
+        root=args.data, train=False, download=True, transform=val_transforms)
+
     val_loader = torch.utils.data.DataLoader(
-        datasets.ImageFolder(valdir, transforms.Compose([
-            transforms.Resize(256),
-            transforms.CenterCrop(224),
-            transforms.ToTensor(),
-            normalize,
-        ])),
-        batch_size=args.batch_size, shuffle=False,
+        val_dataset, batch_size=args.batch_size, shuffle=False,
         num_workers=args.workers, pin_memory=True)
 
     # train the model

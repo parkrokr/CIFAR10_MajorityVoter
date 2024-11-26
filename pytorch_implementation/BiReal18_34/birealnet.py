@@ -37,6 +37,31 @@ class BinaryActivation(nn.Module):
         return out
 
 
+
+class Majority_Voter(nn.Module):
+    def __init__(self):
+        super(Majority_Voter, self).__init__()
+        self.a = nn.Parameter(torch.tensor(1.0))  # 초기값 설정 (1.0 예시)
+
+    def forward(self, x):
+        out_forward = torch.where(x >= 0, torch.tensor(1), torch.tensor(-1))
+        # if not self.training:  # 평가 모드일 때만 실행
+        #     return out_forward
+        # else:
+        x = (x / (x.size(1) + self.a))
+        #out_e1 = (x^2 + 2*x)
+        #out_e2 = (-x^2 + 2*x)
+        out_e_total = 0
+        mask1 = x < -1
+        mask2 = x < 0
+        mask3 = x < 1
+        out1 = (-1) * mask1.type(torch.float32) + (x*x + 2*x) * (1-mask1.type(torch.float32))
+        out2 = out1 * mask2.type(torch.float32) + (-x*x + 2*x) * (1-mask2.type(torch.float32))
+        out3 = out2 * mask3.type(torch.float32) + 1 * (1- mask3.type(torch.float32))
+        out = out_forward.detach() - out3.detach() + out3
+
+        return out
+
 class HardBinaryConv(nn.Module):
     def __init__(self, in_chn, out_chn, kernel_size=3, stride=1, padding=1):
         super(HardBinaryConv, self).__init__()
@@ -44,20 +69,28 @@ class HardBinaryConv(nn.Module):
         self.padding = padding
         self.number_of_weights = in_chn * out_chn * kernel_size * kernel_size
         self.shape = (out_chn, in_chn, kernel_size, kernel_size)
-        self.weights = nn.Parameter(torch.rand((self.number_of_weights,1)) * 0.001, requires_grad=True)
+        #self.weight = nn.Parameter(torch.rand((self.number_of_weights,1)) * 0.001, requires_grad=True)
+        self.weight = nn.Parameter(torch.rand((self.shape)) * 0.001, requires_grad=True)
+        self.in_chn = in_chn
+        self.majority_voter = Majority_Voter()
 
     def forward(self, x):
-        real_weights = self.weights.view(self.shape)
+        #real_weights = self.weights.view(self.shape)
+        real_weights = self.weight
         scaling_factor = torch.mean(torch.mean(torch.mean(abs(real_weights),dim=3,keepdim=True),dim=2,keepdim=True),dim=1,keepdim=True)
-        #print(scaling_factor, flush=True)
+        scaling_factor = scaling_factor.permute(1, 0, 2, 3)
         scaling_factor = scaling_factor.detach()
-        binary_weights_no_grad = scaling_factor * torch.sign(real_weights)
+        #print(scaling_factor, flush=True)
+        binary_weights_no_grad = torch.sign(real_weights)
         cliped_weights = torch.clamp(real_weights, -1.0, 1.0)
         binary_weights = binary_weights_no_grad.detach() - cliped_weights.detach() + cliped_weights
         #print(binary_weights, flush=True)
         y = F.conv2d(x, binary_weights, stride=self.stride, padding=self.padding)
-
-        return y
+        # y_2 = torch.where(y >= 0, torch.tensor(1), torch.tensor(-1))
+        y_2 = self.majority_voter(y)
+        y_3 = scaling_factor * y_2
+        
+        return y_3
 
 class BasicBlock(nn.Module):
     expansion = 1
@@ -88,14 +121,14 @@ class BasicBlock(nn.Module):
 
 class BiRealNet(nn.Module):
 
-    def __init__(self, block, layers, num_classes=1000, zero_init_residual=False):
+    def __init__(self, block, layers, num_classes=10, zero_init_residual=False):
         super(BiRealNet, self).__init__()
         self.inplanes = 64
-        self.conv1 = nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3,
+        self.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1,
                                bias=False)
         self.bn1 = nn.BatchNorm2d(64)
-        self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
-        self.layer1 = self._make_layer(block, 64, layers[0])
+        # self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
+        self.layer1 = self._make_layer(block, 64, layers[0], stride=1)
         self.layer2 = self._make_layer(block, 128, layers[1], stride=2)
         self.layer3 = self._make_layer(block, 256, layers[2], stride=2)
         self.layer4 = self._make_layer(block, 512, layers[3], stride=2)
@@ -122,14 +155,15 @@ class BiRealNet(nn.Module):
     def forward(self, x):
         x = self.conv1(x)
         x = self.bn1(x)
-        x = self.maxpool(x)
+        # x = self.maxpool(x)
 
         x = self.layer1(x)
         x = self.layer2(x)
         x = self.layer3(x)
         x = self.layer4(x)
 
-        x = self.avgpool(x)
+        # x = self.avgpool(x)
+        x = F.avg_pool2d(x, 4)
         x = x.view(x.size(0), -1)
         x = self.fc(x)
 
